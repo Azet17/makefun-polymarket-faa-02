@@ -19,6 +19,9 @@
 // still gets a hair of spread) and capped (a market that just jumped does not
 // get absurdly wide quantiles). Markets with fewer than 10 observed moves fall
 // back to the house baseline's 0.0025, since there is nothing to fit yet.
+// Jump guard: a single-minute move over 0.01 in the last 10 minutes widens
+// the fitted spread 1.5x (still capped), since the FAA markets have jumped
+// 0.2+ in one minute and a quiet MAD would understate a jumpy regime.
 // No drift: on the practice cases a fitted drift made the loss worse, and a
 // prediction-market price is a martingale, so the last price is the centre.
 //
@@ -51,6 +54,12 @@ const MIN_MOVES = 10;
 /** Floor and cap on the fitted spread, in price units per square-root minute. */
 const SIGMA_FLOOR = 0.0002;
 const SIGMA_CAP = 0.008;
+/** A single-minute move larger than this, inside the last JUMP_LOOKBACK minutes,
+ *  counts as a jump: the market is in a jumpy regime, so widen its spread. */
+const JUMP_THRESHOLD = 0.01;
+const JUMP_LOOKBACK = 10;
+/** How much a recent jump widens the fitted spread (still capped at SIGMA_CAP). */
+const JUMP_WIDEN = 1.5;
 /** MAD-to-standard-deviation factor for a normal distribution. */
 const MAD_TO_SD = 1.4826;
 
@@ -88,7 +97,17 @@ function fitSigma(prices: number[]): number {
   let mad = 0;
   for (let i = 0; i < moves; i++) mad += Math.abs(rets[i] - mean);
   mad /= moves;
-  const sigma = mad * MAD_TO_SD;
+  let sigma = mad * MAD_TO_SD;
+  // Jump guard: a big single-minute move in the last few minutes means the
+  // market is in a jumpy regime (the FAA markets jumped 0.2+ in one minute),
+  // so widen the spread instead of trusting the quiet MAD alone.
+  const tail = Math.min(JUMP_LOOKBACK, moves);
+  for (let i = moves - tail; i < moves; i++) {
+    if (Math.abs(rets[i] as number) > JUMP_THRESHOLD) {
+      sigma *= JUMP_WIDEN;
+      break;
+    }
+  }
   return Math.min(SIGMA_CAP, Math.max(SIGMA_FLOOR, sigma));
 }
 
